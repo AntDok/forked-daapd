@@ -193,6 +193,9 @@ static uint64_t last_rtptime;
 static int dev_autoselect;
 static struct raop_device *dev_list;
 
+/* Local Audio Control */
+static uint8_t laudio_enabled;
+
 /* Device status */
 static enum laudio_state laudio_status;
 static int laudio_selected;
@@ -296,7 +299,7 @@ volume_master_update(int newvol)
 
   master_volume = newvol;
 
-  if (laudio_selected)
+  if (laudio_enabled & laudio_selected)
     laudio_relvol = vol_to_rel(laudio_volume);
 
   for (rd = dev_list; rd; rd = rd->next)
@@ -314,7 +317,7 @@ volume_master_find(void)
 
   newmaster = -1;
 
-  if (laudio_selected)
+  if (laudio_enabled & laudio_selected)
     newmaster = laudio_volume;
 
   for (rd = dev_list; rd; rd = rd->next)
@@ -1193,7 +1196,7 @@ playback_write(void)
       return;
     }
 
-  if (laudio_status & LAUDIO_F_STARTED)
+  if (laudio_enabled & laudio_status & LAUDIO_F_STARTED)
     laudio_write(rawbuf, last_rtptime);
 
   if (raop_sessions > 0)
@@ -1784,7 +1787,7 @@ device_restart_cb(struct raop_device *dev, struct raop_session *rs, enum raop_se
 static void
 playback_abort(void)
 {
-  if (laudio_status != LAUDIO_CLOSED)
+  if (laudio_enabled && laudio_status != LAUDIO_CLOSED)
     laudio_close();
 
   if (raop_sessions > 0)
@@ -1826,7 +1829,7 @@ get_status(struct player_command *cmd)
   status->repeat = repeat;
 
   /* No devices selected, autoselect local audio */
-  if (master_volume < 0)
+  if (laudio_enabled && master_volume < 0)
     speaker_select_laudio();
 
   status->volume = master_volume;
@@ -1915,7 +1918,7 @@ now_playing(struct player_command *cmd)
 static int
 playback_stop(struct player_command *cmd)
 {
-  if (laudio_status != LAUDIO_CLOSED)
+  if (laudio_enabled && laudio_status != LAUDIO_CLOSED)
     laudio_close();
 
   /* We may be restarting very soon, so we don't bring the devices to a
@@ -2419,14 +2422,16 @@ speaker_enumerate(struct player_command *cmd)
   laudio_name = cfg_getstr(cfg_getsec(cfg, "audio"), "nickname");
 
   /* Auto-select local audio if there are no AirTunes devices */
-  if (!dev_list && !laudio_selected)
+  if (laudio_enabled && !dev_list && !laudio_selected)
     speaker_select_laudio();
 
-  spk_enum->cb(0, laudio_name, laudio_relvol, laudio_selected, 0, spk_enum->arg);
+  if(laudio_enabled)
+    spk_enum->cb(0, laudio_name, laudio_relvol, laudio_selected, 0, spk_enum->arg);
 
 #ifdef DEBUG_RELVOL
   DPRINTF(E_DBG, L_PLAYER, "*** master: %d\n", master_volume);
-  DPRINTF(E_DBG, L_PLAYER, "*** laudio: abs %d rel %d\n", laudio_volume, laudio_relvol);
+  if(laudio_enabled)
+    DPRINTF(E_DBG, L_PLAYER, "*** laudio: abs %d rel %d\n", laudio_volume, laudio_relvol);
 #endif
 
   for (rd = dev_list; rd; rd = rd->next)
@@ -2451,7 +2456,7 @@ speaker_activate(struct raop_device *rd)
   uint64_t pos;
   int ret;
 
-  if (!rd)
+  if (!rd && laudio_enabled)
     {
       /* Local */
       DPRINTF(E_DBG, L_PLAYER, "Activating local audio\n");
@@ -2529,7 +2534,7 @@ speaker_activate(struct raop_device *rd)
 static int
 speaker_deactivate(struct raop_device *rd)
 {
-  if (!rd)
+  if (!rd && laudio_enabled)
     {
       /* Local */
       DPRINTF(E_DBG, L_PLAYER, "Deactivating local audio\n");
@@ -2647,51 +2652,54 @@ speaker_set(struct player_command *cmd)
     }
 
   /* Local audio */
-  for (i = 1; i <= nspk; i++)
+  if(laudio_enabled)
     {
-      if (ids[i] == 0)
-	break;
-    }
+      for (i = 1; i <= nspk; i++)
+        {
+          if (ids[i] == 0)
+          break;
+        }
 
-  if (i <= nspk)
-    {
-      DPRINTF(E_DBG, L_PLAYER, "Local audio selected\n");
+      if (i <= nspk)
+        {
+          DPRINTF(E_DBG, L_PLAYER, "Local audio selected\n");
 
-      if (!laudio_selected)
-	speaker_select_laudio();
+          if (!laudio_selected)
+            speaker_select_laudio();
 
-      if (!(laudio_status & LAUDIO_F_STARTED))
-	{
-	  ret = speaker_activate(NULL);
-	  if (ret < 0)
-	    {
-	      DPRINTF(E_LOG, L_PLAYER, "Could not activate local audio output\n");
+          if (!(laudio_status & LAUDIO_F_STARTED))
+            {
+              ret = speaker_activate(NULL);
+              if (ret < 0)
+                {
+                  DPRINTF(E_LOG, L_PLAYER, "Could not activate local audio output\n");
 
-	      speaker_deselect_laudio();
+                  speaker_deselect_laudio();
 
-	      if (cmd->ret != -2)
-		cmd->ret = -1;
-	    }
-	}
-    }
-  else
-    {
-      DPRINTF(E_DBG, L_PLAYER, "Local audio NOT selected\n");
+                  if (cmd->ret != -2)
+                    cmd->ret = -1;
+                }
+            }
+        }
+      else
+        {
+          DPRINTF(E_DBG, L_PLAYER, "Local audio NOT selected\n");
 
-      if (laudio_selected)
-	speaker_deselect_laudio();
+          if (laudio_selected)
+            speaker_deselect_laudio();
 
-      if (laudio_status != LAUDIO_CLOSED)
-	{
-	  ret = speaker_deactivate(NULL);
-	  if (ret < 0)
-	    {
-	      DPRINTF(E_LOG, L_PLAYER, "Could not deactivate local audio output\n");
+          if (laudio_status != LAUDIO_CLOSED)
+            {
+              ret = speaker_deactivate(NULL);
+              if (ret < 0)
+                {
+                  DPRINTF(E_LOG, L_PLAYER, "Could not deactivate local audio output\n");
 
-	      if (cmd->ret != -2)
-		cmd->ret = -1;
-	    }
-	}
+                  if (cmd->ret != -2)
+                    cmd->ret = -1;
+                }
+            }
+        }
     }
 
   if (cmd->raop_pending > 0)
@@ -3756,6 +3764,7 @@ player_init(void)
 
   master_volume = -1;
 
+  laudio_enabled = cfg_getbool(cfg_getsec(cfg, "general"), "laudio_enable");
   laudio_selected = 0;
   laudio_status = LAUDIO_CLOSED;
   raop_sessions = 0;
