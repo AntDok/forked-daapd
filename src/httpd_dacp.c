@@ -1503,14 +1503,26 @@ dacp_reply_setspeakers(struct evhttp_request *req, struct evbuffer *evbuf, char 
   struct daap_session *s;
   const char *param;
   const char *ptr;
+  const char *user_agent;
   uint64_t *ids;
   int nspk;
   int i;
   int ret;
+  int isAndroid;
 
   s = daap_session_find(req, query, evbuf);
   if (!s)
     return;
+
+  /* Handle Android remotes that want to send speaker ID back as base-10
+     and not base-16 like the iPhone remote. */
+  isAndroid = 0;
+  user_agent = evhttp_find_header(req->input_headers, "User-Agent");
+  if(user_agent)
+    {
+      if (strncmp(user_agent, "Dalvik", strlen("Dalvik")) == 0)
+        isAndroid = 1;
+    }
 
   param = evhttp_find_header(query, "speaker-id");
   if (!param)
@@ -1546,7 +1558,7 @@ dacp_reply_setspeakers(struct evhttp_request *req, struct evbuffer *evbuf, char 
   do
     {
       param++;
-      ret = safe_hextou64(param, &ids[i]);
+      ret = isAndroid ? safe_atou64(param, &ids[i]) : safe_hextou64(param, &ids[i]);
       if (ret < 0)
 	{
 	  DPRINTF(E_LOG, L_DACP, "Invalid speaker id in request: %s\n", param);
