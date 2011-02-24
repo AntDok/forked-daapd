@@ -142,7 +142,12 @@ artwork_rescale(AVFormatContext *src_ctx, int s, int out_w, int out_h, struct ev
     }
 
   /* Set up output */
+#if LIBAVFORMAT_VERSION_MAJOR >= 53 || (LIBAVFORMAT_VERSION_MAJOR == 52 && LIBAVFORMAT_VERSION_MINOR >= 45)
+  /* FFmpeg 0.6 */
+  dst_fmt = av_guess_format("image2", NULL, NULL);
+#else
   dst_fmt = guess_format("image2", NULL, NULL);
+#endif
   if (!dst_fmt)
     {
       DPRINTF(E_LOG, L_ART, "ffmpeg image2 muxer not available\n");
@@ -274,7 +279,12 @@ artwork_rescale(AVFormatContext *src_ctx, int s, int out_w, int out_h, struct ev
 	  continue;
 	}
 
+#if LIBAVCODEC_VERSION_MAJOR >= 53 || (LIBAVCODEC_VERSION_MAJOR == 52 && LIBAVCODEC_VERSION_MINOR >= 32)
+      /* FFmpeg 0.6 */
+      avcodec_decode_video2(src, i_frame, &have_frame, &pkt);
+#else
       avcodec_decode_video(src, i_frame, &have_frame, pkt.data, pkt.size);
+#endif
 
       break;
     }
@@ -291,7 +301,12 @@ artwork_rescale(AVFormatContext *src_ctx, int s, int out_w, int out_h, struct ev
     }
 
   /* Scale */
+#if (LIBSWSCALE_VERSION_MAJOR == 0 && LIBSWSCALE_VERSION_MINOR >= 9)
+  /* FFmpeg 0.6 */
+  sws_scale(swsctx, (const uint8_t * const *)i_frame->data, i_frame->linesize, 0, src->height, o_frame->data, o_frame->linesize);
+#else
   sws_scale(swsctx, i_frame->data, i_frame->linesize, 0, src->height, o_frame->data, o_frame->linesize);
+#endif
 
   sws_freeContext(swsctx);
   av_free_packet(&pkt);
