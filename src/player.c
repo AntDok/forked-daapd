@@ -3893,7 +3893,7 @@ player_init(void)
       goto raop_fail;
     }
 
-  ret = mdns_browse("_raop._tcp", raop_device_cb);
+  ret = mdns_browse("_raop._tcp", MDNS_WANT_DEFAULT, raop_device_cb);
   if (ret < 0)
     {
       DPRINTF(E_FATAL, L_PLAYER, "Could not add mDNS browser for AirTunes devices\n");
