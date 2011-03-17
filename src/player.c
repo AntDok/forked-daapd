@@ -1423,6 +1423,9 @@ device_add(struct player_command *cmd)
 
 	  rd->v4_address = dev->v4_address;
 	  rd->v4_port = dev->v4_port;
+
+	  /* Address is ours now */
+	  dev->v4_address = NULL;
 	}
 
       if (dev->v6_address)
@@ -1432,6 +1435,9 @@ device_add(struct player_command *cmd)
 
 	  rd->v6_address = dev->v6_address;
 	  rd->v6_port = dev->v6_port;
+
+	  /* Address is ours now */
+	  dev->v6_address = NULL;
 	}
 
       if (rd->name)
@@ -3760,6 +3766,8 @@ int
 player_init(void)
 {
   uint32_t rnd;
+  int raop_v6enabled;
+  int mdns_flags;
   int ret;
 
   player_exit = 0;
@@ -3885,7 +3893,7 @@ player_init(void)
       goto laudio_fail;
     }
 
-  ret = raop_init();
+  ret = raop_init(&raop_v6enabled);
   if (ret < 0)
     {
       DPRINTF(E_LOG, L_PLAYER, "RAOP init failed\n");
@@ -3893,7 +3901,12 @@ player_init(void)
       goto raop_fail;
     }
 
-  ret = mdns_browse("_raop._tcp", MDNS_WANT_DEFAULT, raop_device_cb);
+  if (raop_v6enabled)
+    mdns_flags = MDNS_WANT_V4 | MDNS_WANT_V6 | MDNS_WANT_V6LL;
+  else
+    mdns_flags = MDNS_WANT_V4;
+
+  ret = mdns_browse("_raop._tcp", mdns_flags, raop_device_cb);
   if (ret < 0)
     {
       DPRINTF(E_FATAL, L_PLAYER, "Could not add mDNS browser for AirTunes devices\n");
