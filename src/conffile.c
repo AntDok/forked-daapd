@@ -48,6 +48,7 @@ static cfg_opt_t sec_general[] =
     CFG_STR("db_path", STATEDIR "/cache/" PACKAGE "/songs3.db", CFGF_NONE),
     CFG_INT_CB("loglevel", E_LOG, CFGF_NONE, &cb_loglevel),
     CFG_BOOL("laudio_enable", cfg_true, CFGF_NONE),
+    CFG_BOOL("ipv6", cfg_true, CFGF_NONE),
     CFG_END()
   };
 

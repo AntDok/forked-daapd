@@ -37,6 +37,8 @@
 #include <dirent.h>
 #include <pthread.h>
 
+#include <uninorm.h>
+
 #if defined(__linux__)
 # include <sys/inotify.h>
 #elif defined(__FreeBSD__) || defined(__FreeBSD_kernel__)
@@ -133,6 +135,24 @@ pop_dir(struct stacked_dir **s)
 
 
 static void
+normalize_fixup_tag(char **tag, char *src_tag)
+{
+  char *norm;
+  size_t len;
+
+  /* Note: include terminating NUL in string length for u8_normalize */
+
+  if (!*tag)
+    *tag = (char *)u8_normalize(UNINORM_NFD, (uint8_t *)src_tag, strlen(src_tag) + 1, NULL, &len);
+  else
+    {
+      norm = (char *)u8_normalize(UNINORM_NFD, (uint8_t *)*tag, strlen(*tag) + 1, NULL, &len);
+      free(*tag);
+      *tag = norm;
+    }
+}
+
+static void
 fixup_tags(struct media_file_info *mfi)
 {
   size_t len;
@@ -157,6 +177,24 @@ fixup_tags(struct media_file_info *mfi)
       mfi->title = NULL;
     }
 
+  /*
+   * Default to mpeg4 video/audio for unknown file types
+   * in an attempt to allow streaming of DRM-afflicted files
+   */
+  if (strcmp(mfi->codectype, "unkn") == 0)
+    {
+      if (mfi->has_video)
+	{
+	  strcpy(mfi->codectype, "mp4v");
+	  strcpy(mfi->type, "m4v");
+	}
+      else
+	{
+	  strcpy(mfi->codectype, "mp4a");
+	  strcpy(mfi->type, "m4a");
+	}
+    }
+
   if (!mfi->artist)
     {
       if (mfi->orchestra && mfi->conductor)
@@ -179,6 +217,38 @@ fixup_tags(struct media_file_info *mfi)
         }
     }
 
+  /* Handle TV shows, try to present prettier metadata */
+  if (mfi->tv_series_name && strlen(mfi->tv_series_name) != 0)
+    {
+      mfi->media_kind = 64;  /* tv show */
+
+      /* Default to artist = series_name */
+      if (mfi->artist && strlen(mfi->artist) == 0)
+	{
+	  free(mfi->artist);
+	  mfi->artist = NULL;
+	}
+
+      if (!mfi->artist)
+	mfi->artist = strdup(mfi->tv_series_name);
+
+      /* Default to album = "<series_name>, Season <season_num>" */
+      if (mfi->album && strlen(mfi->album) == 0)
+	{
+	  free(mfi->album);
+	  mfi->album = NULL;
+	}
+
+      if (!mfi->album)
+	{
+	  len = snprintf(NULL, 0, "%s, Season %d", mfi->tv_series_name, mfi->tv_season_num);
+
+	  mfi->album = (char *)malloc(len + 1);
+	  if (mfi->album)
+	    sprintf(mfi->album, "%s, Season %d", mfi->tv_series_name, mfi->tv_season_num);
+	}
+    }
+
   /* Check the 4 top-tags are filled */
   if (!mfi->artist)
     mfi->artist = strdup("Unknown artist");
@@ -197,6 +267,16 @@ fixup_tags(struct media_file_info *mfi)
       else
 	mfi->album_artist = strdup(mfi->artist);
     }
+
+  /* Ensure sort tags are filled and normalized */
+  normalize_fixup_tag(&mfi->artist_sort, mfi->artist);
+  normalize_fixup_tag(&mfi->album_sort, mfi->album);
+  normalize_fixup_tag(&mfi->title_sort, mfi->title);
+  normalize_fixup_tag(&mfi->album_artist_sort, mfi->album_artist);
+
+  /* Composer is not one of our mandatory tags, so take extra care */
+  if (mfi->composer_sort || mfi->composer)
+    normalize_fixup_tag(&mfi->composer_sort, mfi->composer);
 }
 
 
@@ -259,9 +339,11 @@ process_media_file(char *file, time_t mtime, off_t size, int compilation)
       if ((strcmp(ext, ".pls") == 0)
 	  || (strcmp(ext, ".url") == 0))
 	{
+	  mfi.data_kind = 1; /* url/stream */
+
 	  ret = scan_url_file(file, &mfi);
-	  if (ret == 0)
-	    mfi.data_kind = 1; /* url/stream */
+	  if (ret < 0)
+	    goto out;
 	}
       else if ((strcmp(ext, ".png") == 0)
 	       || (strcmp(ext, ".jpg") == 0))
