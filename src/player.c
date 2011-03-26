@@ -381,6 +381,31 @@ speaker_deselect_raop(struct raop_device *rd)
     volume_master_find();
 }
 
+
+static void
+speaker_autoselect_raop(void)
+{
+  struct raop_device *rd;
+  int rd_count, any_rd_selected;
+
+  rd_count = 0;
+  any_rd_selected = 0;
+  for (rd = dev_list; rd; rd = rd->next)
+    {
+      rd_count++;
+      if(rd->selected)
+        {
+          any_rd_selected = rd->selected;
+          break;
+        }
+    }
+
+  if(!any_rd_selected && rd_count == 1)
+    {
+      speaker_select_raop(dev_list);
+    }
+}
+
 int
 player_is_playing(void)
 {
@@ -2438,6 +2463,10 @@ speaker_enumerate(struct player_command *cmd)
 
   if(laudio_enabled)
     spk_enum->cb(0, laudio_name, laudio_relvol, laudio_selected, 0, spk_enum->arg);
+
+  /* Auto-select an AirTunes device*/
+  if(!laudio_enabled)
+    speaker_autoselect_raop();
 
 #ifdef DEBUG_RELVOL
   DPRINTF(E_DBG, L_PLAYER, "*** master: %d\n", master_volume);
