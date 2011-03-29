@@ -1066,7 +1066,7 @@ raop_send_req_teardown(struct raop_session *rs, evrtsp_req_cb cb)
 }
 
 static int
-raop_send_req_flush(struct raop_session *rs, evrtsp_req_cb cb, uint64_t rtptime)
+raop_send_req_flush(struct raop_session *rs, uint64_t rtptime, evrtsp_req_cb cb)
 {
   char buf[64];
   struct evrtsp_request *req;
@@ -1730,7 +1730,7 @@ raop_set_volume_internal(struct raop_session *rs, int volume, evrtsp_req_cb cb)
 }
 
 static void
-raop_set_volume_cb(struct evrtsp_request *req, void *arg)
+raop_cb_set_volume(struct evrtsp_request *req, void *arg)
 {
   raop_status_cb status_cb;
   struct raop_session *rs;
@@ -1774,10 +1774,10 @@ raop_set_volume_one(struct raop_session *rs, int volume, raop_status_cb cb)
 {
   int ret;
 
-  if (!(rs->state & RAOP_CONNECTED))
+  if (!(rs->state & RAOP_F_CONNECTED))
     return 0;
 
-  ret = raop_set_volume_internal(rs, volume, raop_set_volume_cb);
+  ret = raop_set_volume_internal(rs, volume, raop_cb_set_volume);
   if (ret < 0)
     {
       raop_session_failure(rs);
@@ -1791,7 +1791,7 @@ raop_set_volume_one(struct raop_session *rs, int volume, raop_status_cb cb)
 }
 
 static void
-raop_flush_cb(struct evrtsp_request *req, void *arg)
+raop_cb_flush(struct evrtsp_request *req, void *arg)
 {
   raop_status_cb status_cb;
   struct raop_session *rs;
@@ -1861,7 +1861,7 @@ raop_flush(raop_status_cb cb, uint64_t rtptime)
       if (rs->state != RAOP_STREAMING)
 	continue;
 
-      ret = raop_send_req_flush(rs, raop_flush_cb, rtptime);
+      ret = raop_send_req_flush(rs, rtptime, raop_cb_flush);
       if (ret < 0)
 	{
 	  raop_session_failure(rs);
