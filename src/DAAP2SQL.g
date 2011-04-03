@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2009-2010 Julien BLACHE <jb@jblache.org>
+ * Copyright (C) 2009-2011 Julien BLACHE <jb@jblache.org>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -27,12 +27,24 @@ options {
 @header {
 	#include <stdio.h>
 	#include <stdlib.h>
+	#include <string.h>
 	#include <limits.h>
 	#include <errno.h>
 
 	#include "logger.h"
 	#include "db.h"
 	#include "daap_query.h"
+}
+
+@members {
+	struct dmap_query_field_map {
+	  char *dmap_field;
+	  char *db_col;
+	  int as_int;
+	};
+
+	/* gperf static hash, daap_query.gperf */
+	#include "daap_query_hash.c"
 }
 
 query	returns [ pANTLR3_STRING result ]
@@ -94,7 +106,7 @@ expr	returns [ pANTLR3_STRING result, int valid ]
 			pANTLR3_UINT8 escaped;
 			ANTLR3_UINT8 op;
 			int neg_op;
-			struct dmap_query_field_map *dqfm;
+			const struct dmap_query_field_map *dqfm;
 			char *end;
 			long long llval;
 
@@ -162,7 +174,7 @@ expr	returns [ pANTLR3_STRING result, int valid ]
 				neg_op = 0;
 
 			/* Lookup DMAP field in the query field map */
-			dqfm = daap_query_field_lookup((char *)field);
+			dqfm = daap_query_field_lookup((char *)field, strlen((char *)field));
 			if (!dqfm)
 			{
 				DPRINTF(E_LOG, L_DAAP, "DMAP field '\%s' is not a valid field in queries\n", field);

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2010 Julien BLACHE <jb@jblache.org>
+ * Copyright (C) 2010-2011 Julien BLACHE <jb@jblache.org>
  *
  * RAOP AirTunes v2
  *
@@ -96,11 +96,11 @@ struct raop_session
   struct evrtsp_connection *ctrl;
 
   enum raop_session_state state;
-  unsigned req_in_flight:1;
   unsigned req_has_auth:1;
   unsigned encrypt:1;
   unsigned auth_quirk_itunes:1;
 
+  int reqs_in_flight;
   int cseq;
   char *session;
   char session_url[128];
@@ -925,6 +925,8 @@ raop_add_headers(struct raop_session *rs, struct evrtsp_request *req, enum evrts
   snprintf(buf, sizeof(buf), "%d", rs->cseq);
   evrtsp_add_header(req->output_headers, "CSeq", buf);
 
+  rs->cseq++;
+
   evrtsp_add_header(req->output_headers, "User-Agent", "forked-daapd/" VERSION);
 
   /* Add Authorization header */
@@ -954,19 +956,15 @@ raop_add_headers(struct raop_session *rs, struct evrtsp_request *req, enum evrts
 }
 
 static int
-raop_check_cseq(struct raop_session *rs, struct evrtsp_request *req)
+raop_grab_cseq(struct evkeyvalq *headers)
 {
   const char *param;
   int cseq;
   int ret;
 
-  param = evrtsp_find_header(req->input_headers, "CSeq");
+  param = evrtsp_find_header(headers, "CSeq");
   if (!param)
-    {
-      DPRINTF(E_LOG, L_RAOP, "No CSeq in reply\n");
-
-      return -1;
-    }
+    return -1;
 
   ret = safe_atoi32(param, &cseq);
   if (ret < 0)
@@ -976,11 +974,35 @@ raop_check_cseq(struct raop_session *rs, struct evrtsp_request *req)
       return -1;
     }
 
-  /* CSeq is always incremented before checking */
-  if (cseq == (rs->cseq - 1))
+  return cseq;
+}
+
+static int
+raop_check_cseq(struct raop_session *rs, struct evrtsp_request *req)
+{
+  int reply_cseq;
+  int request_cseq;
+
+  reply_cseq = raop_grab_cseq(req->input_headers);
+  if (reply_cseq < 0)
+    {
+      DPRINTF(E_LOG, L_RAOP, "No CSeq in reply\n");
+
+      return -1;
+    }
+
+  request_cseq = raop_grab_cseq(req->output_headers);
+  if (request_cseq < 0)
+    {
+      DPRINTF(E_LOG, L_RAOP, "No CSeq in request\n");
+
+      return -1;
+    }
+
+  if (reply_cseq == request_cseq)
     return 0;
 
-  DPRINTF(E_LOG, L_RAOP, "CSeq in reply does not match last CSeq: got %d expected %d\n", cseq, rs->cseq);
+  DPRINTF(E_LOG, L_RAOP, "Reply CSeq does not match request CSeq: got %d expected %d\n", reply_cseq, request_cseq);
 
   return -1;
 }
@@ -1029,6 +1051,33 @@ raop_make_sdp(struct raop_session *rs, struct evrtsp_request *req, char *address
 
 
 /* RAOP/RTSP requests */
+/*
+ * Request queueing HOWTO
+ *
+ * Sending:
+ * - increment rs->reqs_in_flight
+ * - set evrtsp connection closecb to NULL
+ *
+ * Request callback:
+ * - decrement rs->reqs_in_flight first thing, even if the callback is
+ *   called for error handling (req == NULL or HTTP error code)
+ * - if rs->reqs_in_flight == 0, setup evrtsp connection closecb
+ *
+ * When a request fails, the whole RAOP session is declared failed and
+ * torn down by calling raop_session_failure(), even if there are requests
+ * queued on the evrtsp connection. There is no reason to think pending
+ * requests would work out better than the one that just failed and recovery
+ * would be tricky to get right.
+ *
+ * evrtsp behaviour with queued requests:
+ * - request callback is called with req == NULL to indicate a connection
+ *   error; if there are several requests queued on the connection, this can
+ *   happen for each request if the connection isn't destroyed
+ * - the connection is reset, and the closecb is called if the connection was
+ *   previously connected. There is no closecb set when there are requests in
+ *   flight
+ */
+
 static int
 raop_send_req_teardown(struct raop_session *rs, evrtsp_req_cb cb)
 {
@@ -1058,7 +1107,7 @@ raop_send_req_teardown(struct raop_session *rs, evrtsp_req_cb cb)
       return -1;
     }
 
-  rs->req_in_flight = 1;
+  rs->reqs_in_flight++;
 
   evrtsp_connection_set_closecb(rs->ctrl, NULL, NULL);
 
@@ -1106,7 +1155,7 @@ raop_send_req_flush(struct raop_session *rs, uint64_t rtptime, evrtsp_req_cb cb)
       return -1;
     }
 
-  rs->req_in_flight = 1;
+  rs->reqs_in_flight++;
 
   evrtsp_connection_set_closecb(rs->ctrl, NULL, NULL);
 
@@ -1114,7 +1163,7 @@ raop_send_req_flush(struct raop_session *rs, uint64_t rtptime, evrtsp_req_cb cb)
 }
 
 static int
-raop_send_req_set_parameter(struct raop_session *rs, struct evbuffer *evbuf, evrtsp_req_cb cb)
+raop_send_req_set_parameter(struct raop_session *rs, struct evbuffer *evbuf, char *ctype, char *rtpinfo, evrtsp_req_cb cb)
 {
   struct evrtsp_request *req;
   int ret;
@@ -1143,7 +1192,10 @@ raop_send_req_set_parameter(struct raop_session *rs, struct evbuffer *evbuf, evr
       return -1;
     }
 
-  evrtsp_add_header(req->output_headers, "Content-Type", "text/parameters");
+  evrtsp_add_header(req->output_headers, "Content-Type", ctype);
+
+  if (rtpinfo)
+    evrtsp_add_header(req->output_headers, "RTP-Info", rtpinfo);
 
   ret = evrtsp_make_request(rs->ctrl, req, EVRTSP_REQ_SET_PARAMETER, rs->session_url);
   if (ret < 0)
@@ -1153,7 +1205,7 @@ raop_send_req_set_parameter(struct raop_session *rs, struct evbuffer *evbuf, evr
       return -1;
     }
 
-  rs->req_in_flight = 1;
+  rs->reqs_in_flight++;
 
   evrtsp_connection_set_closecb(rs->ctrl, NULL, NULL);
 
@@ -1203,7 +1255,7 @@ raop_send_req_record(struct raop_session *rs, evrtsp_req_cb cb)
       return -1;
     }
 
-  rs->req_in_flight = 1;
+  rs->reqs_in_flight++;
 
   return 0;
 }
@@ -1251,7 +1303,7 @@ raop_send_req_setup(struct raop_session *rs, evrtsp_req_cb cb)
       return -1;
     }
 
-  rs->req_in_flight = 1;
+  rs->reqs_in_flight++;
 
   return 0;
 }
@@ -1357,7 +1409,7 @@ raop_send_req_announce(struct raop_session *rs, evrtsp_req_cb cb)
       return -1;
     }
 
-  rs->req_in_flight = 1;
+  rs->reqs_in_flight++;
 
   return 0;
 
@@ -1396,7 +1448,7 @@ raop_send_req_options(struct raop_session *rs, evrtsp_req_cb cb)
       return -1;
     }
 
-  rs->req_in_flight = 1;
+  rs->reqs_in_flight++;
 
   evrtsp_connection_set_closecb(rs->ctrl, NULL, NULL);
 
@@ -1560,6 +1612,7 @@ raop_session_make(struct raop_device *rd, int family, raop_status_cb cb)
   memset(rs, 0, sizeof(struct raop_session));
 
   rs->state = RAOP_STOPPED;
+  rs->reqs_in_flight = 0;
   rs->cseq = 1;
 
   rs->dev = rd;
@@ -1720,7 +1773,7 @@ raop_set_volume_internal(struct raop_session *rs, int volume, evrtsp_req_cb cb)
       return -1;
     }
 
-  ret = raop_send_req_set_parameter(rs, evbuf, cb);
+  ret = raop_send_req_set_parameter(rs, evbuf, "text/parameters", NULL, cb);
   if (ret < 0)
     DPRINTF(E_LOG, L_RAOP, "Could not send SET_PARAMETER request for volume\n");
 
@@ -1738,11 +1791,10 @@ raop_cb_set_volume(struct evrtsp_request *req, void *arg)
 
   rs = (struct raop_session *)arg;
 
+  rs->reqs_in_flight--;
+
   if (!req)
     goto error;
-
-  rs->req_in_flight = 0;
-  rs->cseq++;
 
   if (req->response_code != RTSP_OK)
     {
@@ -1760,7 +1812,8 @@ raop_cb_set_volume(struct evrtsp_request *req, void *arg)
   rs->status_cb = NULL;
   status_cb(rs->dev, rs, rs->state);
 
-  evrtsp_connection_set_closecb(rs->ctrl, raop_rtsp_close_cb, rs);
+  if (!rs->reqs_in_flight)
+    evrtsp_connection_set_closecb(rs->ctrl, raop_rtsp_close_cb, rs);
 
   return;
 
@@ -1799,11 +1852,10 @@ raop_cb_flush(struct evrtsp_request *req, void *arg)
 
   rs = (struct raop_session *)arg;
 
+  rs->reqs_in_flight--;
+
   if (!req)
     goto error;
-
-  rs->req_in_flight = 0;
-  rs->cseq++;
 
   if (req->response_code != RTSP_OK)
     {
@@ -1823,7 +1875,8 @@ raop_cb_flush(struct evrtsp_request *req, void *arg)
   rs->status_cb = NULL;
   status_cb(rs->dev, rs, rs->state);
 
-  evrtsp_connection_set_closecb(rs->ctrl, raop_rtsp_close_cb, rs);
+  if (!rs->reqs_in_flight)
+    evrtsp_connection_set_closecb(rs->ctrl, raop_rtsp_close_cb, rs);
 
   return;
 
@@ -2838,11 +2891,10 @@ raop_cb_startup_volume(struct evrtsp_request *req, void *arg)
 
   rs = (struct raop_session *)arg;
 
+  rs->reqs_in_flight--;
+
   if (!req)
     goto cleanup;
-
-  rs->req_in_flight = 0;
-  rs->cseq++;
 
   if (req->response_code != RTSP_OK)
     {
@@ -2869,7 +2921,8 @@ raop_cb_startup_volume(struct evrtsp_request *req, void *arg)
 
   status_cb(rs->dev, rs, rs->state);
 
-  evrtsp_connection_set_closecb(rs->ctrl, raop_rtsp_close_cb, rs);
+  if (!rs->reqs_in_flight)
+    evrtsp_connection_set_closecb(rs->ctrl, raop_rtsp_close_cb, rs);
 
   return;
 
@@ -2886,11 +2939,10 @@ raop_cb_startup_record(struct evrtsp_request *req, void *arg)
 
   rs = (struct raop_session *)arg;
 
+  rs->reqs_in_flight--;
+
   if (!req)
     goto cleanup;
-
-  rs->req_in_flight = 0;
-  rs->cseq++;
 
   if (req->response_code != RTSP_OK)
     {
@@ -2934,11 +2986,10 @@ raop_cb_startup_setup(struct evrtsp_request *req, void *arg)
 
   rs = (struct raop_session *)arg;
 
+  rs->reqs_in_flight--;
+
   if (!req)
     goto cleanup;
-
-  rs->req_in_flight = 0;
-  rs->cseq++;
 
   if (req->response_code != RTSP_OK)
     {
@@ -3080,11 +3131,10 @@ raop_cb_startup_announce(struct evrtsp_request *req, void *arg)
 
   rs = (struct raop_session *)arg;
 
+  rs->reqs_in_flight--;
+
   if (!req)
     goto cleanup;
-
-  rs->req_in_flight = 0;
-  rs->cseq++;
 
   if (req->response_code != RTSP_OK)
     {
@@ -3118,11 +3168,10 @@ raop_cb_startup_options(struct evrtsp_request *req, void *arg)
 
   rs = (struct raop_session *)arg;
 
+  rs->reqs_in_flight--;
+
   if (!req)
     goto cleanup;
-
-  rs->req_in_flight = 0;
-  rs->cseq++;
 
   if ((req->response_code != RTSP_OK) && (req->response_code != RTSP_UNAUTHORIZED))
     {
@@ -3183,11 +3232,10 @@ raop_cb_shutdown_teardown(struct evrtsp_request *req, void *arg)
 
   rs = (struct raop_session *)arg;
 
+  rs->reqs_in_flight--;
+
   if (!req)
     goto error;
-
-  rs->req_in_flight = 0;
-  rs->cseq++;
 
   if (req->response_code != RTSP_OK)
     {
@@ -3225,11 +3273,10 @@ raop_cb_probe_options(struct evrtsp_request *req, void *arg)
 
   rs = (struct raop_session *)arg;
 
+  rs->reqs_in_flight--;
+
   if (!req)
     goto cleanup;
-
-  rs->req_in_flight = 0;
-  rs->cseq++;
 
   if ((req->response_code != RTSP_OK) && (req->response_code != RTSP_UNAUTHORIZED))
     {

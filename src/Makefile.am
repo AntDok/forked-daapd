@@ -21,6 +21,18 @@ if COND_OSS4
 OSS4SRC=laudio_oss4.c
 endif
 
+GPERF_FILES = \
+	daap_query.gperf \
+	rsp_query.gperf \
+	dacp_prop.gperf \
+	dmap_fields.gperf
+
+GPERF_PRODUCTS = \
+	daap_query_hash.c \
+	rsp_query_hash.c \
+	dacp_prop_hash.c \
+	dmap_fields_hash.c
+
 ANTLR_GRAMMARS = \
 	RSP.g RSP2SQL.g \
 	DAAP.g DAAP2SQL.g
@@ -82,14 +94,29 @@ forked_daapd_SOURCES = main.c \
 nodist_forked_daapd_SOURCES = \
 	$(ANTLR_SOURCES)
 
+BUILT_SOURCES = \
+	$(GPERF_PRODUCTS)
+
 EXTRA_DIST = \
 	$(ANTLR_GRAMMARS) \
 	scan-mpc.c \
 	scan-flac.c
 
-# Let's help the dependencies a little.
-rsp_query.c: RSPLexer.h RSPParser.h RSP2SQL.h
-daap_query.c: DAAPLexer.h DAAPParser.h DAAP2SQL.h
+CLEANFILES = \
+	$(GPERF_PRODUCTS)
+
+
+# gperf construction rules
+%_hash.c: %.gperf
+	if $(GPERF) $< > $@.tmp; then \
+		mv $@.tmp $@; \
+	elif $(GPERF) --version >/dev/null 2>&1; then \
+		rm $@.tmp; \
+		exit 1; \
+	else \
+		rm $@.tmp; \
+		touch $@; \
+	fi
 
 # Support for building the parsers when ANTLR3 is available
 if COND_ANTLR
@@ -105,14 +132,17 @@ SUFFIXES = .g .u
 	@cat $@.tmp >> $@
 	@rm $@.tmp
 
-clean-local:
-	rm -f $(ANTLR_PRODUCTS)
-	rm -f $(ANTLR_GRAMMARS:.g=.u)
+BUILT_SOURCES += $(ANTLR_SOURCES)
+
+CLEANFILES += \
+	$(ANTLR_PRODUCTS) \
+	$(ANTLR_GRAMMARS:.g=.u)
 
 else !COND_ANTLR
-distclean-local:
-	rm -f $(ANTLR_SOURCES)
-	rm -f $(ANTLR_GRAMMARS:.g=.u)
+DISTCLEANFILES = \
+	$(ANTLR_PRODUCTS) \
+	$(ANTLR_GRAMMARS:.g=.u)
+
 endif
 
 -include $(ANTLR_GRAMMARS:.g=.u)

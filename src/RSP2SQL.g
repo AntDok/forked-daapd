@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2009-2010 Julien BLACHE <jb@jblache.org>
+ * Copyright (C) 2009-2011 Julien BLACHE <jb@jblache.org>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -36,6 +36,21 @@ options {
 	#include "db.h"
 	#include "misc.h"
 	#include "rsp_query.h"
+}
+
+@members {
+	#define RSP_TYPE_STRING 0
+	#define RSP_TYPE_INT    1
+	#define RSP_TYPE_DATE   2
+
+	struct rsp_query_field_map {
+	  char *rsp_field;
+	  int field_type;
+	  /* RSP fields are named after the DB columns - or vice versa */
+	};
+
+	/* gperf static hash, rsp_query.gperf */
+	#include "rsp_query_hash.c"
 }
 
 query	returns [ pANTLR3_STRING result ]
@@ -139,7 +154,7 @@ strcrit	returns [ pANTLR3_STRING result, int valid ]
 	:	^(o = strop f = FIELD s = STR)
 		{
 			char *op;
-			struct rsp_query_field_map *rqfp;
+			const struct rsp_query_field_map *rqfp;
 			pANTLR3_STRING field;
 			char *escaped;
 			ANTLR3_UINT32 optok;
@@ -164,7 +179,7 @@ strcrit	returns [ pANTLR3_STRING result, int valid ]
 			field = $f->getText($f);
 
 			/* Field lookup */
-			rqfp = rsp_query_field_lookup((char *)field->chars);
+			rqfp = rsp_query_field_lookup((char *)field->chars, strlen((char *)field->chars));
 			if (!rqfp)
 			{
 				DPRINTF(E_LOG, L_RSP, "Field '\%s' is not a valid field in queries\n", field->chars);
@@ -225,7 +240,7 @@ intcrit	returns [ pANTLR3_STRING result, int valid ]
 	:	^(o = intop f = FIELD i = INT)
 		{
 			char *op;
-			struct rsp_query_field_map *rqfp;
+			const struct rsp_query_field_map *rqfp;
 			pANTLR3_STRING field;
 
 			op = NULL;
@@ -255,7 +270,7 @@ intcrit	returns [ pANTLR3_STRING result, int valid ]
 			field = $f->getText($f);
 
 			/* Field lookup */
-			rqfp = rsp_query_field_lookup((char *)field->chars);
+			rqfp = rsp_query_field_lookup((char *)field->chars, strlen((char *)field->chars));
 			if (!rqfp)
 			{
 				DPRINTF(E_LOG, L_RSP, "Field '\%s' is not a valid field in queries\n", field->chars);
@@ -299,7 +314,7 @@ datecrit	returns [ pANTLR3_STRING result, int valid ]
 	:	^(o = dateop f = FIELD d = datespec)
 		{
 			char *op;
-			struct rsp_query_field_map *rqfp;
+			const struct rsp_query_field_map *rqfp;
 			pANTLR3_STRING field;
 			char buf[32];
 			int ret;
@@ -319,7 +334,7 @@ datecrit	returns [ pANTLR3_STRING result, int valid ]
 			field = $f->getText($f);
 
 			/* Field lookup */
-			rqfp = rsp_query_field_lookup((char *)field->chars);
+			rqfp = rsp_query_field_lookup((char *)field->chars, strlen((char *)field->chars));
 			if (!rqfp)
 			{
 				DPRINTF(E_LOG, L_RSP, "Field '\%s' is not a valid field in queries\n", field->chars);
