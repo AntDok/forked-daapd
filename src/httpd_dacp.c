@@ -46,7 +46,7 @@
 #include "artwork.h"
 #include "httpd.h"
 #include "httpd_dacp.h"
-#include "dmap_helpers.h"
+#include "dmap_common.h"
 #include "db.h"
 #include "player.h"
 
@@ -1351,7 +1351,7 @@ dacp_reply_setproperty(struct evhttp_request *req, struct evbuffer *evbuf, char 
 }
 
 static void
-speaker_enum_cb(uint64_t id, const char *name, int relvol, int selected, int has_password, void *arg)
+speaker_enum_cb(uint64_t id, const char *name, int relvol, struct spk_flags flags, void *arg)
 {
   struct evbuffer *evbuf;
   int len;
@@ -1359,16 +1359,20 @@ speaker_enum_cb(uint64_t id, const char *name, int relvol, int selected, int has
   evbuf = (struct evbuffer *)arg;
 
   len = 8 + strlen(name) + 28;
-  if (selected)
+  if (flags.selected)
     len += 9;
-  if (has_password)
+  if (flags.has_password)
+    len += 9;
+  if (flags.has_video)
     len += 9;
 
   dmap_add_container(evbuf, "mdcl", len); /* 8 + len */
-  if (selected)
+  if (flags.selected)
     dmap_add_char(evbuf, "caia", 1);      /* 9 */
-  if (has_password)
+  if (flags.has_password)
     dmap_add_char(evbuf, "cahp", 1);      /* 9 */
+  if (flags.has_video)
+    dmap_add_char(evbuf, "caiv", 1);      /* 9 */
   dmap_add_string(evbuf, "minm", name);   /* 8 + len */
   dmap_add_long(evbuf, "msma", id);       /* 16 */
 

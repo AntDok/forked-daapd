@@ -51,7 +51,7 @@
 #include "artwork.h"
 #include "httpd_daap.h"
 #include "daap_query.h"
-#include "dmap_helpers.h"
+#include "dmap_common.h"
 
 /* httpd event base, from httpd.c */
 extern struct event_base *evbase_httpd;
@@ -79,19 +79,6 @@ struct daap_update_request {
   struct daap_update_request *next;
 };
 
-struct dmap_field_map {
-  ssize_t mfi_offset;
-  ssize_t pli_offset;
-  ssize_t gri_offset;
-};
-
-struct dmap_field {
-  char *desc;
-  char *tag;
-  const struct dmap_field_map *dfm;
-  enum dmap_type type;
-};
-
 struct sort_ctx {
   struct evbuffer *headerlist;
   int16_t mshc;
@@ -100,9 +87,6 @@ struct sort_ctx {
   uint32_t misc_mshn;
 };
 
-
-/* gperf static hash, dmap_fields.gperf */
-#include "dmap_fields_hash.c"
 
 /* Default meta tags if not provided in the query */
 static char *default_meta_plsongs = "dmap.itemkind,dmap.itemid,dmap.itemname,dmap.containeritemid,dmap.parentcontainerid";
@@ -293,144 +277,6 @@ update_fail_cb(struct evhttp_connection *evcon, void *arg)
     }
 
   free(ur);
-}
-
-
-/* DMAP fields helpers */
-static void
-dmap_add_field(struct evbuffer *evbuf, const struct dmap_field *df, char *strval, int32_t intval)
-{
-  union {
-    int32_t v_i32;
-    uint32_t v_u32;
-    int64_t v_i64;
-    uint64_t v_u64;
-  } val;
-  int ret;
-
-  if (strval && (df->type != DMAP_TYPE_STRING))
-    {
-      switch (df->type)
-	{
-	  case DMAP_TYPE_DATE:
-	  case DMAP_TYPE_UBYTE:
-	  case DMAP_TYPE_USHORT:
-	  case DMAP_TYPE_UINT:
-	    ret = safe_atou32(strval, &val.v_u32);
-	    if (ret < 0)
-	      val.v_u32 = 0;
-	    break;
-
-	  case DMAP_TYPE_BYTE:
-	  case DMAP_TYPE_SHORT:
-	  case DMAP_TYPE_INT:
-	    ret = safe_atoi32(strval, &val.v_i32);
-	    if (ret < 0)
-	      val.v_i32 = 0;
-	    break;
-
-	  case DMAP_TYPE_ULONG:
-	    ret = safe_atou64(strval, &val.v_u64);
-	    if (ret < 0)
-	      val.v_u64 = 0;
-	    break;
-
-	  case DMAP_TYPE_LONG:
-	    ret = safe_atoi64(strval, &val.v_i64);
-	    if (ret < 0)
-	      val.v_i64 = 0;
-	    break;
-
-	  /* DMAP_TYPE_VERSION & DMAP_TYPE_LIST not handled here */
-	  default:
-	    DPRINTF(E_LOG, L_DAAP, "Unsupported DMAP type %d for DMAP field %s\n", df->type, df->desc);
-	    return;
-	}
-    }
-  else if (!strval && (df->type != DMAP_TYPE_STRING))
-    {
-      switch (df->type)
-	{
-	  case DMAP_TYPE_DATE:
-	  case DMAP_TYPE_UBYTE:
-	  case DMAP_TYPE_USHORT:
-	  case DMAP_TYPE_UINT:
-	    val.v_u32 = intval;
-	    break;
-
-	  case DMAP_TYPE_BYTE:
-	  case DMAP_TYPE_SHORT:
-	  case DMAP_TYPE_INT:
-	    val.v_i32 = intval;
-	    break;
-
-	  case DMAP_TYPE_ULONG:
-	    val.v_u64 = intval;
-	    break;
-
-	  case DMAP_TYPE_LONG:
-	    val.v_i64 = intval;
-	    break;
-
-	  /* DMAP_TYPE_VERSION & DMAP_TYPE_LIST not handled here */
-	  default:
-	    DPRINTF(E_LOG, L_DAAP, "Unsupported DMAP type %d for DMAP field %s\n", df->type, df->desc);
-	    return;
-	}
-    }
-
-  switch (df->type)
-    {
-      case DMAP_TYPE_UBYTE:
-	if (val.v_u32)
-	  dmap_add_char(evbuf, df->tag, val.v_u32);
-	break;
-
-      case DMAP_TYPE_BYTE:
-	if (val.v_i32)
-	  dmap_add_char(evbuf, df->tag, val.v_i32);
-	break;
-
-      case DMAP_TYPE_USHORT:
-	if (val.v_u32)
-	  dmap_add_short(evbuf, df->tag, val.v_u32);
-	break;
-
-      case DMAP_TYPE_SHORT:
-	if (val.v_i32)
-	  dmap_add_short(evbuf, df->tag, val.v_i32);
-	break;
-
-      case DMAP_TYPE_DATE:
-      case DMAP_TYPE_UINT:
-	if (val.v_u32)
-	  dmap_add_int(evbuf, df->tag, val.v_u32);
-	break;
-
-      case DMAP_TYPE_INT:
-	if (val.v_i32)
-	  dmap_add_int(evbuf, df->tag, val.v_i32);
-	break;
-
-      case DMAP_TYPE_ULONG:
-	if (val.v_u64)
-	  dmap_add_long(evbuf, df->tag, val.v_u64);
-	break;
-
-      case DMAP_TYPE_LONG:
-	if (val.v_i64)
-	  dmap_add_long(evbuf, df->tag, val.v_i64);
-	break;
-
-      case DMAP_TYPE_STRING:
-	if (strval)
-	  dmap_add_string(evbuf, df->tag, strval);
-	break;
-
-      case DMAP_TYPE_VERSION:
-      case DMAP_TYPE_LIST:
-	return;
-    }
 }
 
 
@@ -811,12 +657,16 @@ daap_reply_server_info(struct evhttp_request *req, struct evbuffer *evbuf, char 
 static void
 daap_reply_content_codes(struct evhttp_request *req, struct evbuffer *evbuf, char **uri, struct evkeyvalq *query)
 {
+  const struct dmap_field *dmap_fields;
+  int nfields;
   int i;
   int len;
   int ret;
 
+  dmap_fields = dmap_get_fields_table(&nfields);
+
   len = 12;
-  for (i = 0; i < (sizeof(dmap_fields) / sizeof(dmap_fields[0])); i++)
+  for (i = 0; i < nfields; i++)
     len += 8 + 12 + 10 + 8 + strlen(dmap_fields[i].desc);
 
   ret = evbuffer_expand(evbuf, len + 8);
@@ -831,7 +681,7 @@ daap_reply_content_codes(struct evhttp_request *req, struct evbuffer *evbuf, cha
   dmap_add_container(evbuf, "mccr", len);
   dmap_add_int(evbuf, "mstt", 200);
 
-  for (i = 0; i < (sizeof(dmap_fields) / sizeof(dmap_fields[0])); i++)
+  for (i = 0; i < nfields; i++)
     {
       len = 12 + 10 + 8 + strlen(dmap_fields[i].desc);
 
@@ -1063,22 +913,14 @@ daap_reply_songlist_generic(struct evhttp_request *req, struct evbuffer *evbuf, 
   struct db_media_file_info dbmfi;
   struct evbuffer *song;
   struct evbuffer *songlist;
-  const struct dmap_field_map *dfm;
-  const struct dmap_field *df;
   const struct dmap_field **meta;
   struct sort_ctx *sctx;
   const char *param;
   char *tag;
-  char **strval;
-  char *ptr;
   int nmeta;
   int sort_headers;
   int nsongs;
   int transcode;
-  int want_mikd;
-  int want_asdk;
-  int32_t val;
-  int i;
   int ret;
 
   DPRINTF(E_DBG, L_DAAP, "Fetching song list for playlist %d\n", playlist);
@@ -1197,8 +1039,6 @@ daap_reply_songlist_generic(struct evhttp_request *req, struct evbuffer *evbuf, 
       goto out_query_free;
     }
 
-  want_mikd = 0;
-  want_asdk = 0;
   nsongs = 0;
   while (((ret = db_query_fetch_file(&qp, &dbmfi)) == 0) && (dbmfi.id))
     {
@@ -1206,99 +1046,13 @@ daap_reply_songlist_generic(struct evhttp_request *req, struct evbuffer *evbuf, 
 
       transcode = transcode_needed(req->input_headers, dbmfi.codectype);
 
-      i = -1;
-      while (1)
+      ret = dmap_encode_file_metadata(songlist, song, &dbmfi, meta, nmeta, transcode);
+      if (ret < 0)
 	{
-	  i++;
+	  DPRINTF(E_LOG, L_DAAP, "Failed to encode song metadata\n");
 
-	  /* Specific meta tags requested (or default list) */
-	  if (nmeta > 0)
-	    {
-	      if (i == nmeta)
-		break;
-
-	      df = meta[i];
-	      dfm = df->dfm;
-	    }
-	  /* No specific meta tags requested, send out everything */
-	  else
-	    {
-	      /* End of list */
-	      if (i == (sizeof(dmap_fields) / sizeof(dmap_fields[0])))
-		break;
-
-	      df = &dmap_fields[i];
-	      dfm = dmap_fields[i].dfm;
-	    }
-
-	  /* Not in struct media_file_info */
-	  if (dfm->mfi_offset < 0)
-	    continue;
-
-	  /* Will be prepended to the list */
-	  if (dfm == &dfm_dmap_mikd)
-	    {
-	      /* item kind */
-	      want_mikd = 1;
-	      continue;
-	    }
-	  else if (dfm == &dfm_dmap_asdk)
-	    {
-	      /* data kind */
-	      want_asdk = 1;
-	      continue;
-	    }
-
-	  DPRINTF(E_DBG, L_DAAP, "Investigating %s\n", df->desc);
-
-	  strval = (char **) ((char *)&dbmfi + dfm->mfi_offset);
-
-	  if (!(*strval) || (**strval == '\0'))
-            continue;
-
-	  /* Here's one exception ... codectype (ascd) is actually an integer */
-	  if (dfm == &dfm_dmap_ascd)
-	    {
-	      dmap_add_literal(song, df->tag, *strval, 4);
-	      continue;
-	    }
-
-	  val = 0;
-
-	  if (transcode)
-            {
-              switch (dfm->mfi_offset)
-                {
-		  case dbmfi_offsetof(type):
-		    ptr = "wav";
-		    strval = &ptr;
-		    break;
-
-		  case dbmfi_offsetof(bitrate):
-		    val = 0;
-		    ret = safe_atoi32(dbmfi.samplerate, &val);
-		    if ((ret < 0) || (val == 0))
-		      val = 1411;
-		    else
-		      val = (val * 8) / 250;
-
-		    ptr = NULL;
-		    strval = &ptr;
-		    break;
-
-		  case dbmfi_offsetof(description):
-		    ptr = "wav audio file";
-		    strval = &ptr;
-		    break;
-
-		  default:
-		    break;
-                }
-            }
-
-	  dmap_add_field(song, df, *strval, val);
-
-	  DPRINTF(E_DBG, L_DAAP, "Done with meta tag %s (%s)\n", df->desc, *strval);
+	  ret = -100;
+	  break;
 	}
 
       /* Always include sort tags */
@@ -1323,40 +1077,6 @@ daap_reply_songlist_generic(struct evhttp_request *req, struct evbuffer *evbuf, 
    	}
 
       DPRINTF(E_DBG, L_DAAP, "Done with song\n");
-
-      val = 0;
-      if (want_mikd)
-	val += 9;
-      if (want_asdk)
-	val += 9;
-
-      dmap_add_container(songlist, "mlit", EVBUFFER_LENGTH(song) + val);
-
-      /* Prepend mikd & asdk if needed */
-      if (want_mikd)
-	{
-	  /* dmap.itemkind must come first */
-	  ret = safe_atoi32(dbmfi.item_kind, &val);
-	  if (ret < 0)
-	    val = 2; /* music by default */
-	  dmap_add_char(songlist, "mikd", val);
-	}
-      if (want_asdk)
-	{
-	  ret = safe_atoi32(dbmfi.data_kind, &val);
-	  if (ret < 0)
-	    val = 0;
-	  dmap_add_char(songlist, "asdk", val);
-	}
-
-      ret = evbuffer_add_buffer(songlist, song);
-      if (ret < 0)
-	{
-	  DPRINTF(E_LOG, L_DAAP, "Could not add song to song list for DAAP song list reply\n");
-
-	  ret = -100;
-	  break;
-	}
     }
 
   DPRINTF(E_DBG, L_DAAP, "Done with song list, %d songs\n", nsongs);
