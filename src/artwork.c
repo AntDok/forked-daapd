@@ -37,6 +37,9 @@
 
 #include "db.h"
 #include "logger.h"
+#if LIBAVFORMAT_VERSION_MAJOR >= 53
+# include "avio_evbuffer.h"
+#endif
 #include "artwork.h"
 
 
@@ -196,6 +199,9 @@ artwork_rescale(AVFormatContext *src_ctx, int s, int out_w, int out_h, int forma
 
   dst_ctx->oformat = dst_fmt;
 
+#if LIBAVFORMAT_VERSION_MAJOR >= 53
+  dst_fmt->flags &= ~AVFMT_NOFILE;
+#else
   ret = snprintf(dst_ctx->filename, sizeof(dst_ctx->filename), "evbuffer:%p", evbuf);
   if ((ret < 0) || (ret >= sizeof(dst_ctx->filename)))
     {
@@ -204,6 +210,7 @@ artwork_rescale(AVFormatContext *src_ctx, int s, int out_w, int out_h, int forma
       ret = -1;
       goto out_free_dst_ctx;
     }
+#endif
 
   dst_st = av_new_stream(dst_ctx, 0);
   if (!dst_st)
@@ -216,13 +223,21 @@ artwork_rescale(AVFormatContext *src_ctx, int s, int out_w, int out_h, int forma
 
   dst = dst_st->codec;
 
+#if LIBAVCODEC_VERSION_MAJOR >= 53 || (LIBAVCODEC_VERSION_MAJOR == 52 && LIBAVCODEC_VERSION_MINOR >= 64)
+  avcodec_get_context_defaults2(dst, AVMEDIA_TYPE_VIDEO);
+#else
   avcodec_get_context_defaults2(dst, CODEC_TYPE_VIDEO);
+#endif
 
   if (dst_fmt->flags & AVFMT_GLOBALHEADER)
     dst->flags |= CODEC_FLAG_GLOBAL_HEADER;
 
   dst->codec_id = dst_fmt->video_codec;
+#if LIBAVCODEC_VERSION_MAJOR >= 53 || (LIBAVCODEC_VERSION_MAJOR == 52 && LIBAVCODEC_VERSION_MINOR >= 64)
+  dst->codec_type = AVMEDIA_TYPE_VIDEO;
+#else
   dst->codec_type = CODEC_TYPE_VIDEO;
+#endif
 
   pix_fmt_mask = 0;
   pix_fmts = img_encoder->pix_fmts;
@@ -338,8 +353,8 @@ artwork_rescale(AVFormatContext *src_ctx, int s, int out_w, int out_h, int forma
     }
 
   /* Scale */
-#if (LIBSWSCALE_VERSION_MAJOR == 0 && LIBSWSCALE_VERSION_MINOR >= 9)
-  /* FFmpeg 0.6 */
+#if LIBSWSCALE_VERSION_MAJOR >= 1 || (LIBSWSCALE_VERSION_MAJOR == 0 && LIBSWSCALE_VERSION_MINOR >= 9)
+  /* FFmpeg 0.6, libav 0.6+ */
   sws_scale(swsctx, (const uint8_t * const *)i_frame->data, i_frame->linesize, 0, src->height, o_frame->data, o_frame->linesize);
 #else
   sws_scale(swsctx, i_frame->data, i_frame->linesize, 0, src->height, o_frame->data, o_frame->linesize);
@@ -349,7 +364,11 @@ artwork_rescale(AVFormatContext *src_ctx, int s, int out_w, int out_h, int forma
   av_free_packet(&pkt);
 
   /* Open output file */
+#if LIBAVFORMAT_VERSION_MAJOR >= 53
+  dst_ctx->pb = avio_evbuffer_open(evbuf);
+#else
   ret = url_fopen(&dst_ctx->pb, dst_ctx->filename, URL_WRONLY);
+#endif
   if (ret < 0)
     {
       DPRINTF(E_LOG, L_ART, "Could not open artwork destination buffer\n");
@@ -368,7 +387,11 @@ artwork_rescale(AVFormatContext *src_ctx, int s, int out_w, int out_h, int forma
     {
       DPRINTF(E_LOG, L_ART, "Out of memory for encoded artwork buffer\n");
 
+#if LIBAVFORMAT_VERSION_MAJOR >= 53
+      avio_evbuffer_close(dst_ctx->pb);
+#else
       url_fclose(dst_ctx->pb);
+#endif
 
       ret = -1;
       goto out_free_buf;
@@ -433,7 +456,11 @@ artwork_rescale(AVFormatContext *src_ctx, int s, int out_w, int out_h, int forma
     }
 
  out_fclose_dst:
+#if LIBAVFORMAT_VERSION_MAJOR >= 53
+  avio_evbuffer_close(dst_ctx->pb);
+#else
   url_fclose(dst_ctx->pb);
+#endif
   av_free(outbuf);
 
  out_free_buf:

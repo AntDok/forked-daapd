@@ -130,11 +130,19 @@ AC_RUN_IFELSE(
 AC_LANG_POP([C])
 LIBS="$save_LIBS"
 
-PKG_CHECK_MODULES(FFMPEG, [ libavcodec libavformat libswscale libavutil ])
+PKG_CHECK_MODULES(LIBAV, [ libavcodec libavformat libswscale libavutil ])
 dnl Check for av_lock_manager (ffmpeg >= 0.5.1)
 save_LIBS="$LIBS"
-AC_CHECK_LIB([avcodec], [av_lockmgr_register], , AC_MSG_ERROR([ffmpeg >= 0.5.1 required]))
+AC_CHECK_LIB([avcodec], [av_lockmgr_register], , AC_MSG_ERROR([libav (ffmpeg) >= 0.5.1 required]))
 LIBS="$save_LIBS"
+
+# Check for libavformat >= 53; url -> avio switch
+_PKG_CONFIG([libavformat_VERSION], [atleast-version=53], [libavformat])
+if test $pkg_failed = yes; then
+	AM_CONDITIONAL(COND_AVIO, false)
+else
+	AM_CONDITIONAL(COND_AVIO, true)
+fi
 
 PKG_CHECK_MODULES(MINIXML, [ mxml ])
 

@@ -21,6 +21,12 @@ if COND_OSS4
 OSS4SRC=laudio_oss4.c
 endif
 
+if COND_AVIO
+AVIO_SRC=avio_evbuffer.c avio_evbuffer.h
+else
+FFURL_SRC=ffmpeg_url_evbuffer.c ffmpeg_url_evbuffer.h
+endif
+
 GPERF_FILES = \
 	daap_query.gperf \
 	rsp_query.gperf \
@@ -51,12 +57,12 @@ forked_daapd_CPPFLAGS = -D_GNU_SOURCE \
 	@OSS4CPPFLAGS@
 
 forked_daapd_CFLAGS = \
-	@ZLIB_CFLAGS@ @AVAHI_CFLAGS@ @SQLITE3_CFLAGS@ @FFMPEG_CFLAGS@ \
+	@ZLIB_CFLAGS@ @AVAHI_CFLAGS@ @SQLITE3_CFLAGS@ @LIBAV_CFLAGS@ \
 	@CONFUSE_CFLAGS@ @TAGLIB_CFLAGS@ @MINIXML_CFLAGS@ @LIBPLIST_CFLAGS@ \
 	@LIBGCRYPT_CFLAGS@ @GPG_ERROR_CFLAGS@ @ALSA_CFLAGS@
 
 forked_daapd_LDADD = -lrt \
-	@ZLIB_LIBS@ @AVAHI_LIBS@ @SQLITE3_LIBS@ @FFMPEG_LIBS@ \
+	@ZLIB_LIBS@ @AVAHI_LIBS@ @SQLITE3_LIBS@ @LIBAV_LIBS@ \
 	@CONFUSE_LIBS@ @FLAC_LIBS@ @TAGLIB_LIBS@ @LIBEVENT_LIBS@ \
 	@LIBAVL_LIBS@ @MINIXML_LIBS@ @ANTLR3C_LIBS@ @LIBPLIST_LIBS@ \
 	@LIBGCRYPT_LIBS@ @GPG_ERROR_LIBS@ @ALSA_LIBS@ @LIBUNISTRING@
@@ -71,7 +77,7 @@ forked_daapd_SOURCES = main.c \
 	remote_pairing.c remote_pairing.h \
 	evhttp/http.c evhttp/evhttp.h \
 	evhttp/http-internal.h evhttp/log.h \
-	ffmpeg_url_evbuffer.c ffmpeg_url_evbuffer.h \
+	$(FFURL_SRC) $(AVIO_SRC) \
 	httpd.c httpd.h \
 	httpd_rsp.c httpd_rsp.h \
 	httpd_daap.c httpd_daap.h \

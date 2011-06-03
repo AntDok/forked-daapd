@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2009-2010 Julien BLACHE <jb@jblache.org>
+ * Copyright (C) 2009-2011 Julien BLACHE <jb@jblache.org>
  *
  * Adapted from mt-daapd:
  * Copyright (C) 2006-2007 Ron Pedde <ron@pedde.com>
@@ -279,7 +279,12 @@ transcode_seek(struct transcode_ctx *ctx, int ms)
 
   avcodec_flush_buffers(ctx->acodec);
 
+#if LIBAVCODEC_VERSION_MAJOR >= 53
+  ctx->acodec->skip_frame = AVDISCARD_NONREF;
+#else
   ctx->acodec->hurry_up = 1;
+#endif
+
   flags = 0;
   while (1)
     {
@@ -304,6 +309,12 @@ transcode_seek(struct transcode_ctx *ctx, int ms)
 
       break;
     }
+
+#if LIBAVCODEC_VERSION_MAJOR >= 53
+  ctx->acodec->skip_frame = AVDISCARD_DEFAULT;
+#else
+  ctx->acodec->hurry_up = 0;
+#endif
 
   /* Error while reading frame above */
   if (flags)
@@ -363,7 +374,11 @@ transcode_setup(struct media_file_info *mfi, off_t *est_size, int wavhdr)
   ctx->astream = -1;
   for (i = 0; i < ctx->fmtctx->nb_streams; i++)
     {
+#if LIBAVCODEC_VERSION_MAJOR >= 53 || (LIBAVCODEC_VERSION_MAJOR == 52 && LIBAVCODEC_VERSION_MINOR >= 64)
+      if (ctx->fmtctx->streams[i]->codec->codec_type == AVMEDIA_TYPE_AUDIO)
+#else
       if (ctx->fmtctx->streams[i]->codec->codec_type == CODEC_TYPE_AUDIO)
+#endif
 	{
 	  ctx->astream = i;
 
@@ -435,7 +450,11 @@ transcode_setup(struct media_file_info *mfi, off_t *est_size, int wavhdr)
 	}
 
       ctx->need_resample = 1;
+#if LIBAVCODEC_VERSION_MAJOR >= 53
+      ctx->input_size = ctx->acodec->channels * av_get_bits_per_sample_fmt(ctx->acodec->sample_fmt) / 8;
+#else
       ctx->input_size = ctx->acodec->channels * av_get_bits_per_sample_format(ctx->acodec->sample_fmt) / 8;
+#endif
     }
 
   ctx->duration = mfi->song_length;
