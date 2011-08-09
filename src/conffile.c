@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2009-2010 Julien BLACHE <jb@jblache.org>
+ * Copyright (C) 2009-2011 Julien BLACHE <jb@jblache.org>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -25,7 +25,9 @@
 #include <stdlib.h>
 #include <stdint.h>
 
+#include <sys/types.h>
 #include <sys/utsname.h>
+#include <pwd.h>
 
 #include <errno.h>
 
@@ -75,6 +77,7 @@ static cfg_opt_t sec_audio[] =
 #elif defined(__FreeBSD__) || defined(__FreeBSD_kernel__)
     CFG_STR("card", "/dev/dsp", CFGF_NONE),
 #endif
+    CFG_STR("mixer", NULL, CFGF_NONE),
     CFG_END()
   };
 
@@ -97,6 +100,8 @@ static cfg_opt_t toplvl_cfg[] =
 
 cfg_t *cfg;
 uint64_t libhash;
+uid_t runas_uid;
+gid_t runas_gid;
 
 
 static int
@@ -242,6 +247,8 @@ int
 conffile_load(char *file)
 {
   cfg_t *lib;
+  struct passwd *pw;
+  char *runas;
   int ret;
 
   cfg = cfg_init(toplvl_cfg, CFGF_NONE);
@@ -260,6 +267,19 @@ conffile_load(char *file)
 
       goto out_fail;
     }
+
+  /* Resolve runas username */
+  runas = cfg_getstr(cfg_getsec(cfg, "general"), "uid");
+  pw = getpwnam(runas);
+  if (!pw)
+    {
+      DPRINTF(E_FATAL, L_CONF, "Could not lookup user %s: %s\n", runas, strerror(errno));
+
+      goto out_fail;
+    }
+
+  runas_uid = pw->pw_uid;
+  runas_gid = pw->pw_gid;
 
   lib = cfg_getsec(cfg, "library");
 
